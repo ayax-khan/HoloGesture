@@ -21,15 +21,15 @@ GESTURE_LABELS = {
 }
 
 GESTURE_ACTIONS = {
-    Gesture.PINCH: "Scaling object",
-    Gesture.OPEN_PALM: "Rotating object",
-    Gesture.VICTORY: "Victory detected",
-    Gesture.POINTING: "Pointing mode",
-    Gesture.FIST: "Fist detected",
-    Gesture.SWIPE_LEFT: "Navigating left",
-    Gesture.SWIPE_RIGHT: "Navigating right",
-    Gesture.THUMBS_UP: "Confirm action",
-    Gesture.SPREAD_HAND: "Spread detected",
+    Gesture.PINCH: "Zoom In/Out ✂️",
+    Gesture.OPEN_PALM: "Rotate 🔄",
+    Gesture.VICTORY: "Victory ✌️",
+    Gesture.POINTING: "Move 👆",
+    Gesture.FIST: "Grab & Move ✊",
+    Gesture.SWIPE_LEFT: "Slide ⬅️",
+    Gesture.SWIPE_RIGHT: "Slide ➡️",
+    Gesture.THUMBS_UP: "Reset 🔄",
+    Gesture.SPREAD_HAND: "Spread ✋",
 }
 
 

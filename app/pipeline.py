@@ -17,6 +17,7 @@ from app.errors import CameraError, HoloError, install_global_exception_hook
 logger = logging.getLogger(__name__)
 
 GESTURE_TO_ACTION = {
+    Gesture.FIST: "grab",
     Gesture.OPEN_PALM: "rotate",
     Gesture.PINCH: "scale",
     Gesture.SWIPE_LEFT: "translate",
@@ -44,6 +45,8 @@ class ProcessingPipeline:
         self._frame_count = 0
         self._current_fps = 0
         self._last_hand_pos: Optional[np.ndarray] = None
+        self._grab_last_pos: Optional[np.ndarray] = None
+        self._is_grabbed: bool = False
 
         self._setup_state_handlers()
 
@@ -140,35 +143,55 @@ class ProcessingPipeline:
         if pos is None:
             return
 
-        if gesture == Gesture.OPEN_PALM:
+        if gesture == Gesture.FIST:
+            self._is_grabbed = True
+            if self._grab_last_pos is not None:
+                dx = (pos[0] - self._grab_last_pos[0]) * 3.0
+                dy = (pos[1] - self._grab_last_pos[1]) * 3.0
+                dz = (self._grab_last_pos[2] - pos[2]) * 3.0
+                self.object_model.translate_by(dx, -dy, dz)
+            self._grab_last_pos = pos.copy()
+            self._last_hand_pos = None
+
+        elif gesture == Gesture.OPEN_PALM:
+            self._is_grabbed = False
             if self._last_hand_pos is not None:
                 dx = (pos[0] - self._last_hand_pos[0]) * 120.0
                 dy = (pos[1] - self._last_hand_pos[1]) * 120.0
                 self.object_model.rotate_by(dy, dx)
             self._last_hand_pos = pos.copy()
+            self._grab_last_pos = None
 
         elif gesture == Gesture.PINCH:
+            self._is_grabbed = False
             if self._last_hand_pos is not None:
                 dz = (self._last_hand_pos[2] - pos[2]) * 3.0
                 self.object_model.scale_by(dz)
             self._last_hand_pos = pos.copy()
+            self._grab_last_pos = None
 
         elif gesture in (Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT):
+            self._is_grabbed = False
             direction = -1.0 if gesture == Gesture.SWIPE_LEFT else 1.0
             self.object_model.translate_by(direction * 0.1, 0.0)
 
         elif gesture == Gesture.POINTING:
+            self._is_grabbed = False
             if self._last_hand_pos is not None:
                 dx = (pos[0] - self._last_hand_pos[0]) * 2.0
                 dy = (pos[1] - self._last_hand_pos[1]) * 2.0
                 self.object_model.translate_by(dx, -dy)
             self._last_hand_pos = pos.copy()
+            self._grab_last_pos = None
 
         elif gesture == Gesture.THUMBS_UP:
+            self._is_grabbed = False
             self.object_model.reset()
 
         if gesture == Gesture.NONE:
             self._last_hand_pos = None
+            self._grab_last_pos = None
+            self._is_grabbed = False
 
     def _handle_camera_error(self):
         self.hud.set_status("Camera error - attempting reconnect...")
@@ -236,6 +259,7 @@ class ProcessingPipeline:
         data["frame"] = self._last_frame
         data["landmarks"] = self._landmarks
         data["hand_detected"] = self.tracker.hand_detected
+        data["is_grabbed"] = self._is_grabbed
         return data
 
     @property

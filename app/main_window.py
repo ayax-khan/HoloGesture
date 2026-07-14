@@ -232,7 +232,11 @@ class HoloGestureWindow(QMainWindow):
         self._fps_label.setText(f"FPS: {fps}")
 
         status = data.get("hand_status", "")
-        if data.get("tracking_lost", False):
+        is_grabbed = data.get("is_grabbed", False)
+        if is_grabbed:
+            status = "✊ Grabbed — move hand to shift object"
+            ss = "color: #FF4444; background: rgba(255, 68, 68, 0.12); border-color: rgba(255, 68, 68, 0.4);"
+        elif data.get("tracking_lost", False):
             ss = "color: #FFAA44; background: rgba(255, 170, 68, 0.08); border-color: rgba(255, 170, 68, 0.3);"
         else:
             ss = "color: #88CCFF; background: rgba(0, 174, 249, 0.08); border-color: rgba(0, 174, 249, 0.2);"

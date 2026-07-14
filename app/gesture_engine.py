@@ -191,18 +191,13 @@ class GestureEngine:
         folded = 0
         for tip, pip in [(self.MIDDLE_TIP, self.MIDDLE_PIP), (self.RING_TIP, self.RING_PIP), (self.PINKY_TIP, self.PINKY_PIP)]:
             angle = angle_between_vectors(lms[tip] - lms[pip], lms[pip] - lms[self.WRIST])
-            if angle < config.gesture.finger_extension_angle * 0.6:
+            if angle < config.gesture.finger_extension_angle * 0.7:
                 folded += 1
-        thumb_angle = angle_between_vectors(
-            lms[self.THUMB_TIP] - lms[self.THUMB_IP],
-            lms[self.THUMB_IP] - lms[self.WRIST]
-        )
         is_pointing = (
             index_ext > config.gesture.finger_extension_angle
             and folded >= 2
-            and thumb_angle < config.gesture.finger_extension_angle * 0.6
         )
-        return is_pointing, 0.8 if is_pointing else 0.0
+        return is_pointing, 0.7 if is_pointing else 0.0
 
     def _detect_fist(self, lms: np.ndarray) -> Tuple[bool, float]:
         folded = 0
