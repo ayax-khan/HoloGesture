@@ -294,4 +294,4 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
-<p align="center">Powered by <strong>ayax-khan</strong> — Co-founder of <a href="https://devssdo.com">devssdo.com</a></p>
+<p align="center">Powered By <strong>Ayax-Khan</strong> Co-Founder Of <a href="https://devssdo.com">devssdo.com</a></p>
