@@ -21,10 +21,9 @@ class TrackingConfig:
 
 @dataclass
 class GestureConfig:
-    pinch_threshold: float = 0.05
-    finger_extension_angle: float = 140.0
-    victory_angle_min: float = 25.0
-    victory_angle_max: float = 65.0
+    pinch_threshold: float = 0.08
+    victory_angle_min: float = 20.0
+    victory_angle_max: float = 60.0
     swipe_threshold: float = 0.15
     confidence_threshold: float = 0.6
     gesture_cooldown: float = 0.3

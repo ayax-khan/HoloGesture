@@ -48,6 +48,14 @@ def _make_landmarks(hand_type: str = "open"):
         lms[12] = wrist + np.array([0.01, -0.08, 0.0])
         lms[16] = wrist + np.array([0.05, -0.06, 0.0])
         lms[20] = wrist + np.array([0.07, -0.03, 0.0])
+    elif hand_type == "neutral":
+        for i in range(1, 21):
+            lms[i] = wrist + np.array([(i % 4) * 0.04 - 0.06, -(i // 4) * 0.03, 0.0])
+        lms[4] = wrist + np.array([-0.15, -0.02, 0.0])
+        lms[8] = wrist + np.array([-0.05, -0.08, 0.0])
+        lms[12] = wrist + np.array([0.01, -0.08, 0.0])
+        lms[16] = wrist + np.array([0.07, -0.06, 0.0])
+        lms[20] = wrist + np.array([0.10, -0.03, 0.0])
 
     return lms
 
@@ -57,7 +65,7 @@ class TestGestureEngine:
         self.engine = GestureEngine()
 
     def test_none_gesture(self):
-        event = self.engine.classify(_make_landmarks("open"), 0.016)
+        event = self.engine.classify(_make_landmarks("neutral"), 0.016)
         assert event.gesture == Gesture.NONE
 
     def test_pinch_gesture(self):
@@ -66,7 +74,7 @@ class TestGestureEngine:
 
     def test_gesture_cooldown(self):
         self.engine.classify(_make_landmarks("pinch"), 0.016)
-        event = self.engine.classify(_make_landmarks("relaxed"), 0.016)
+        event = self.engine.classify(_make_landmarks("neutral"), 0.016)
         assert event.gesture == Gesture.PINCH
 
     def test_confidence_threshold(self):
@@ -77,7 +85,7 @@ class TestGestureEngine:
     def test_reset(self):
         self.engine.classify(_make_landmarks("pinch"), 0.016)
         self.engine.reset()
-        event = self.engine.classify(_make_landmarks("relaxed"), 0.016)
+        event = self.engine.classify(_make_landmarks("neutral"), 0.016)
         assert event.gesture == Gesture.NONE
 
 

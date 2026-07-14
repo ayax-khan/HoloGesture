@@ -11,6 +11,13 @@ from app.math_utils import (
 
 logger = logging.getLogger(__name__)
 
+# Angle thresholds for finger states
+# Angle between (TIP-PIP) and (PIP-WRIST):
+#   Extended: ~0-50°  (fingertip away from wrist)
+#   Folded:   ~130-180° (fingertip curled back toward wrist)
+FINGER_EXTENDED_ANGLE = 50.0
+FINGER_FOLDED_ANGLE = 130.0
+
 
 class Gesture(Enum):
     NONE = auto()
@@ -39,6 +46,8 @@ class GestureEngine:
     RING_TIP = 16
     PINKY_TIP = 20
     THUMB_IP = 3
+    THUMB_MCP = 2
+    THUMB_CMC = 1
     INDEX_PIP = 6
     MIDDLE_PIP = 10
     RING_PIP = 14
@@ -139,75 +148,88 @@ class GestureEngine:
         self._filtered_position = (alpha * pos + (1 - alpha) * self._filtered_position)
         return self._filtered_position
 
+    def _finger_angle(self, lms: np.ndarray, tip: int, pip: int) -> float:
+        return angle_between_vectors(lms[tip] - lms[pip], lms[pip] - lms[self.WRIST])
+
+    def _thumb_angle(self, lms: np.ndarray) -> float:
+        return angle_between_vectors(lms[self.THUMB_TIP] - lms[self.THUMB_IP],
+                                     lms[self.THUMB_IP] - lms[self.WRIST])
+
+    def _finger_extended(self, lms: np.ndarray, tip: int, pip: int) -> bool:
+        return self._finger_angle(lms, tip, pip) < FINGER_EXTENDED_ANGLE
+
+    def _finger_folded(self, lms: np.ndarray, tip: int, pip: int) -> bool:
+        return self._finger_angle(lms, tip, pip) > FINGER_FOLDED_ANGLE
+
+    def _count_extended(self, lms: np.ndarray) -> int:
+        count = 0
+        for tip, pip in [(self.INDEX_TIP, self.INDEX_PIP),
+                          (self.MIDDLE_TIP, self.MIDDLE_PIP),
+                          (self.RING_TIP, self.RING_PIP),
+                          (self.PINKY_TIP, self.PINKY_PIP)]:
+            if self._finger_extended(lms, tip, pip):
+                count += 1
+        if self._thumb_angle(lms) < FINGER_EXTENDED_ANGLE:
+            count += 1
+        return count
+
+    def _count_folded(self, lms: np.ndarray) -> int:
+        count = 0
+        for tip, pip in [(self.INDEX_TIP, self.INDEX_PIP),
+                          (self.MIDDLE_TIP, self.MIDDLE_PIP),
+                          (self.RING_TIP, self.RING_PIP),
+                          (self.PINKY_TIP, self.PINKY_PIP)]:
+            if self._finger_folded(lms, tip, pip):
+                count += 1
+        if self._thumb_angle(lms) > FINGER_FOLDED_ANGLE:
+            count += 1
+        return count
+
     def _detect_pinch(self, lms: np.ndarray) -> Tuple[bool, float]:
         dist = euclidean_distance(lms[self.THUMB_TIP], lms[self.INDEX_TIP])
-        confidence = max(0.0, 1.0 - dist / (config.gesture.pinch_threshold * 3))
-        return dist < config.gesture.pinch_threshold, min(confidence, 1.0)
+        threshold = config.gesture.pinch_threshold
+        confidence = max(0.0, 1.0 - dist / (threshold * 3))
+        return dist < threshold, min(confidence, 1.0)
 
     def _detect_open_palm(self, lms: np.ndarray) -> Tuple[bool, float]:
-        tips = [self.INDEX_TIP, self.MIDDLE_TIP, self.RING_TIP, self.PINKY_TIP]
-        pips = [self.INDEX_PIP, self.MIDDLE_PIP, self.RING_PIP, self.PINKY_PIP]
-        extended = 0
-        for tip, pip in zip(tips, pips):
-            angle = angle_between_vectors(lms[tip] - lms[pip], lms[pip] - lms[self.WRIST])
-            if angle > config.gesture.finger_extension_angle:
-                extended += 1
-        thumb_angle = angle_between_vectors(
-            lms[self.THUMB_TIP] - lms[self.THUMB_IP],
-            lms[self.THUMB_IP] - lms[self.WRIST]
-        )
-        if thumb_angle > config.gesture.finger_extension_angle:
-            extended += 1
-        return extended >= 4, extended / 5.0
+        ext = self._count_extended(lms)
+        return ext >= 4, ext / 5.0
 
     def _detect_victory(self, lms: np.ndarray) -> Tuple[bool, float]:
+        index_ext = self._finger_extended(lms, self.INDEX_TIP, self.INDEX_PIP)
+        middle_ext = self._finger_extended(lms, self.MIDDLE_TIP, self.MIDDLE_PIP)
+        ring_folded = self._finger_folded(lms, self.RING_TIP, self.RING_PIP)
+        pinky_folded = self._finger_folded(lms, self.PINKY_TIP, self.PINKY_PIP)
+
         index_vec = lms[self.INDEX_TIP] - lms[self.INDEX_MCP]
         middle_vec = lms[self.MIDDLE_TIP] - lms[self.MIDDLE_MCP]
-        ring_vec = lms[self.RING_TIP] - lms[self.RING_MCP]
-        pinky_vec = lms[self.PINKY_TIP] - lms[self.PINKY_PIP]
-
-        idx_mid_angle = angle_between_vectors(index_vec, middle_vec)
-        ring_ext = angle_between_vectors(ring_vec, lms[self.RING_PIP] - lms[self.WRIST])
-        pinky_ext = angle_between_vectors(pinky_vec, lms[self.PINKY_PIP] - lms[self.WRIST])
-
-        index_ext = angle_between_vectors(index_vec, lms[self.INDEX_MCP] - lms[self.WRIST])
-        middle_ext = angle_between_vectors(middle_vec, lms[self.MIDDLE_MCP] - lms[self.WRIST])
+        spread = angle_between_vectors(index_vec, middle_vec)
 
         condition = (
-            config.gesture.victory_angle_min < idx_mid_angle < config.gesture.victory_angle_max
-            and index_ext > config.gesture.finger_extension_angle
-            and middle_ext > config.gesture.finger_extension_angle
-            and ring_ext < config.gesture.finger_extension_angle * 0.7
-            and pinky_ext < config.gesture.finger_extension_angle * 0.7
+            index_ext and middle_ext
+            and ring_folded and pinky_folded
+            and config.gesture.victory_angle_min < spread < config.gesture.victory_angle_max
         )
         score = 0.0
         if condition:
-            score = min(1.0, (idx_mid_angle - config.gesture.victory_angle_min) / 20.0)
+            score = min(1.0, (spread - config.gesture.victory_angle_min) / 20.0)
         return condition, score
 
     def _detect_pointing(self, lms: np.ndarray) -> Tuple[bool, float]:
-        index_vec = lms[self.INDEX_TIP] - lms[self.INDEX_MCP]
-        index_ext = angle_between_vectors(index_vec, lms[self.INDEX_MCP] - lms[self.WRIST])
-        folded = 0
-        for tip, pip in [(self.MIDDLE_TIP, self.MIDDLE_PIP), (self.RING_TIP, self.RING_PIP), (self.PINKY_TIP, self.PINKY_PIP)]:
-            angle = angle_between_vectors(lms[tip] - lms[pip], lms[pip] - lms[self.WRIST])
-            if angle < config.gesture.finger_extension_angle * 0.7:
-                folded += 1
-        is_pointing = (
-            index_ext > config.gesture.finger_extension_angle
-            and folded >= 2
-        )
+        index_ext = self._finger_extended(lms, self.INDEX_TIP, self.INDEX_PIP)
+        others_folded = 0
+        for tip, pip in [(self.MIDDLE_TIP, self.MIDDLE_PIP),
+                          (self.RING_TIP, self.RING_PIP),
+                          (self.PINKY_TIP, self.PINKY_PIP)]:
+            if self._finger_folded(lms, tip, pip):
+                others_folded += 1
+        is_pointing = index_ext and others_folded >= 2
         return is_pointing, 0.7 if is_pointing else 0.0
 
     def _detect_fist(self, lms: np.ndarray) -> Tuple[bool, float]:
-        folded = 0
-        for tip, pip in [(self.INDEX_TIP, self.INDEX_PIP), (self.MIDDLE_TIP, self.MIDDLE_PIP),
-                          (self.RING_TIP, self.RING_PIP), (self.PINKY_TIP, self.PINKY_PIP)]:
-            dist = euclidean_distance(lms[tip], lms[pip])
-            if dist < 0.04:
-                folded += 1
-        thumb_over = euclidean_distance(lms[self.THUMB_TIP], lms[self.INDEX_MCP]) < 0.06
-        return (folded >= 3 and thumb_over), folded / 4.0
+        folded = self._count_folded(lms)
+        thumb_cross = euclidean_distance(lms[self.THUMB_TIP], lms[self.INDEX_MCP]) < 0.06
+        return (folded >= 4 and thumb_cross), folded / 5.0
 
     def _detect_swipe(self, lms: np.ndarray) -> Tuple[bool, Gesture, float]:
         wrist_x = lms[self.WRIST][0]
@@ -222,15 +244,15 @@ class GestureEngine:
         return False, Gesture.NONE, 0.0
 
     def _detect_thumbs_up(self, lms: np.ndarray) -> Tuple[bool, float]:
-        thumb_vec = lms[self.THUMB_TIP] - lms[self.THUMB_IP]
-        thumb_ext = angle_between_vectors(thumb_vec, lms[self.WRIST] - lms[self.THUMB_IP])
-        folded = 0
-        for tip, pip in [(self.INDEX_TIP, self.INDEX_PIP), (self.MIDDLE_TIP, self.MIDDLE_PIP),
-                          (self.RING_TIP, self.RING_PIP), (self.PINKY_TIP, self.PINKY_PIP)]:
-            angle = angle_between_vectors(lms[tip] - lms[pip], lms[pip] - lms[self.WRIST])
-            if angle < config.gesture.finger_extension_angle * 0.5:
-                folded += 1
-        return (thumb_ext > config.gesture.finger_extension_angle and folded >= 3), 0.75 if folded >= 3 else 0.0
+        thumb_ext = self._thumb_angle(lms) < FINGER_EXTENDED_ANGLE
+        others_folded = 0
+        for tip, pip in [(self.INDEX_TIP, self.INDEX_PIP),
+                          (self.MIDDLE_TIP, self.MIDDLE_PIP),
+                          (self.RING_TIP, self.RING_PIP),
+                          (self.PINKY_TIP, self.PINKY_PIP)]:
+            if self._finger_folded(lms, tip, pip):
+                others_folded += 1
+        return (thumb_ext and others_folded >= 3), 0.75 if others_folded >= 3 else 0.0
 
     def reset(self):
         self._last_gesture = Gesture.NONE
