@@ -1,19 +1,18 @@
 import logging
 import time
-from typing import Optional
+from typing import Optional, List
 
+import cv2
 import numpy as np
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QOpenGLWidget, QApplication,
     QDialog, QSlider, QComboBox, QFormLayout, QDialogButtonBox,
-    QCheckBox, QSpinBox, QDoubleSpinBox, QSplashScreen
+    QCheckBox, QSpinBox, QDoubleSpinBox
 )
-from PyQt5.QtCore import Qt, QTimer, QRect
-import cv2
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import (
-    QPainter, QColor, QFont, QPen, QBrush, QPixmap, QFontDatabase,
-    QImage
+    QPainter, QColor, QFont, QPen, QBrush, QPixmap, QImage
 )
 
 from OpenGL import GL
@@ -27,6 +26,16 @@ from app.mesh import ObjectType, OBJECT_NAMES
 from app.errors import install_global_exception_hook
 
 logger = logging.getLogger(__name__)
+
+
+HAND_SKELETON = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (0, 9), (9, 10), (10, 11), (11, 12),
+    (0, 13), (13, 14), (14, 15), (15, 16),
+    (0, 17), (17, 18), (18, 19), (19, 20),
+    (5, 9), (9, 13), (13, 17)
+]
 
 
 class GLWidget(QOpenGLWidget):
@@ -74,13 +83,9 @@ class SettingsDialog(QDialog):
         self.smoothing.setValue(config.app.smoothing_factor)
         layout.addRow("Smoothing:", self.smoothing)
 
-        self.show_fps = QCheckBox()
-        self.show_fps.setChecked(config.hud.show_fps)
-        layout.addRow("Show FPS:", self.show_fps)
-
         self.show_landmarks = QCheckBox()
-        self.show_landmarks.setChecked(False)
-        layout.addRow("Debug Landmarks:", self.show_landmarks)
+        self.show_landmarks.setChecked(True)
+        layout.addRow("Show Hand Landmarks:", self.show_landmarks)
 
         self.camera_id = QSpinBox()
         self.camera_id.setRange(0, 10)
@@ -97,13 +102,15 @@ class SettingsDialog(QDialog):
         return {
             "sensitivity": self.sensitivity.value(),
             "smoothing": self.smoothing.value(),
-            "show_fps": self.show_fps.isChecked(),
             "show_landmarks": self.show_landmarks.isChecked(),
             "camera_id": self.camera_id.value(),
         }
 
 
 class HoloGestureWindow(QMainWindow):
+    PREVIEW_W = 320
+    PREVIEW_H = 240
+
     def __init__(self):
         super().__init__()
         self._pipeline = ProcessingPipeline()
@@ -115,8 +122,7 @@ class HoloGestureWindow(QMainWindow):
         self._cam_preview_label: Optional[QLabel] = None
         self._timer: Optional[QTimer] = None
         self._last_time = time.perf_counter()
-        self._debug_landmarks = False
-        self._splash_shown = False
+        self._show_landmarks = True
         self._init_ui()
 
     def _init_ui(self):
@@ -162,15 +168,6 @@ class HoloGestureWindow(QMainWindow):
         top_bar.addWidget(self._fps_label)
         overlay_layout.addLayout(top_bar)
 
-        mid_area = QHBoxLayout()
-        mid_area.addStretch()
-        self._cam_preview_label = QLabel()
-        self._cam_preview_label.setFixedSize(160, 120)
-        self._cam_preview_label.setStyleSheet("border: 1px solid rgba(0, 174, 249, 0.3); background: #0A0A1A;")
-        self._cam_preview_label.hide()
-        mid_area.addWidget(self._cam_preview_label)
-        overlay_layout.addLayout(mid_area)
-
         overlay_layout.addStretch()
 
         bottom_bar = QHBoxLayout()
@@ -190,15 +187,16 @@ class HoloGestureWindow(QMainWindow):
         settings_btn.clicked.connect(self._show_settings)
         bottom_bar.addWidget(settings_btn)
 
-        debug_btn = QPushButton("◎ Debug")
-        debug_btn.setCheckable(True)
-        debug_btn.clicked.connect(self._toggle_debug)
-        bottom_bar.addWidget(debug_btn)
-
         exit_btn = QPushButton("✕ Exit")
         exit_btn.clicked.connect(self.close)
         bottom_bar.addWidget(exit_btn)
         overlay_layout.addLayout(bottom_bar)
+
+        self._cam_preview_label = QLabel(self._gl_widget)
+        self._cam_preview_label.setFixedSize(self.PREVIEW_W, self.PREVIEW_H)
+        self._cam_preview_label.setStyleSheet("border: 1px solid #00AEF9; background: #0A0A1A;")
+        self._cam_preview_label.move(12, 50)
+        self._cam_preview_label.raise_()
 
         overlay.setGeometry(0, 0, self.width(), self.height())
         self._start_pipeline()
@@ -242,17 +240,36 @@ class HoloGestureWindow(QMainWindow):
         self._status_label.setText(status)
 
     def _update_camera_preview(self):
-        frame = getattr(self._pipeline, '_last_frame', None)
-        if frame is not None and self._cam_preview_label.isVisible():
-            h, w = frame.shape[:2]
-            fx = frame.copy()
-            if h > 0 and w > 0:
-                from PyQt5.QtGui import QImage
-                rgb = fx[..., ::-1] if fx.shape[2] == 3 else fx
-                preview = fx  # BGR
-                preview_resized = cv2.resize(preview, (160, 120))
-                img = QImage(preview_resized.data, 160, 120, QImage.Format_RGB888).rgbSwapped()
-                self._cam_preview_label.setPixmap(QPixmap.fromImage(img))
+        data = self._pipeline.hud_data
+        frame = data.get("frame")
+        landmarks = data.get("landmarks")
+        detected = data.get("hand_detected", False)
+
+        if frame is None:
+            return
+
+        h, w = frame.shape[:2]
+        preview = cv2.resize(frame, (self.PREVIEW_W, self.PREVIEW_H))
+
+        if detected and landmarks and self._show_landmarks:
+            for connection in HAND_SKELETON:
+                idx1, idx2 = connection
+                if idx1 < len(landmarks) and idx2 < len(landmarks):
+                    x1 = int(landmarks[idx1][0] * self.PREVIEW_W)
+                    y1 = int(landmarks[idx1][1] * self.PREVIEW_H)
+                    x2 = int(landmarks[idx2][0] * self.PREVIEW_W)
+                    y2 = int(landmarks[idx2][1] * self.PREVIEW_H)
+                    cv2.line(preview, (x1, y1), (x2, y2), (0, 180, 255), 2)
+
+            for lm in landmarks:
+                x = int(lm[0] * self.PREVIEW_W)
+                y = int(lm[1] * self.PREVIEW_H)
+                cv2.circle(preview, (x, y), 4, (0, 255, 255), -1)
+                cv2.circle(preview, (x, y), 4, (255, 255, 255), 1)
+
+        rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+        img = QImage(rgb.data, self.PREVIEW_W, self.PREVIEW_H, QImage.Format_RGB888)
+        self._cam_preview_label.setPixmap(QPixmap.fromImage(img))
 
     def _switch_object(self):
         types = list(ObjectType)
@@ -265,16 +282,10 @@ class HoloGestureWindow(QMainWindow):
         if dlg.exec_() == QDialog.Accepted:
             s = dlg.get_settings()
             config.app.smoothing_factor = s["smoothing"]
-            config.hud.show_fps = s["show_fps"]
-            self._debug_landmarks = s["show_landmarks"]
+            self._show_landmarks = s["show_landmarks"]
             if s["camera_id"] != config.camera.device_id:
                 config.camera.device_id = s["camera_id"]
                 logger.info(f"Camera ID changed to {s['camera_id']}, restart recommended")
-
-    def _toggle_debug(self, checked):
-        self._debug_landmarks = checked
-        self._cam_preview_label.setVisible(checked)
-        logger.info(f"Debug overlay: {'on' if checked else 'off'}")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -282,6 +293,8 @@ class HoloGestureWindow(QMainWindow):
             overlay = self._gl_widget.findChild(QWidget)
             if overlay:
                 overlay.setGeometry(0, 0, self._gl_widget.width(), self._gl_widget.height())
+            if self._cam_preview_label:
+                self._cam_preview_label.move(12, 50)
 
     def closeEvent(self, event):
         logger.info("Application closing...")
@@ -289,6 +302,3 @@ class HoloGestureWindow(QMainWindow):
             self._timer.stop()
         self._pipeline.stop()
         event.accept()
-
-
-

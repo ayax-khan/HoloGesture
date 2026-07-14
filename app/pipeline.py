@@ -232,7 +232,11 @@ class ProcessingPipeline:
 
     @property
     def hud_data(self) -> dict:
-        return self.hud.get_hud_data()
+        data = self.hud.get_hud_data()
+        data["frame"] = self._last_frame
+        data["landmarks"] = self._landmarks
+        data["hand_detected"] = self.tracker.hand_detected
+        return data
 
     @property
     def current_fps(self) -> int:

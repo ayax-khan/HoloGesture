@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from config import config
 from app.gesture_engine import Gesture
