@@ -16,7 +16,7 @@ class TrackingConfig:
     min_detection_confidence: float = 0.7
     min_tracking_confidence: float = 0.5
     model_complexity: int = 1
-    max_num_hands: int = 1
+    max_num_hands: int = 2
 
 
 @dataclass

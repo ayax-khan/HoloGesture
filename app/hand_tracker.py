@@ -1,5 +1,6 @@
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+from dataclasses import dataclass
 
 import cv2
 import mediapipe as mp
@@ -26,6 +27,12 @@ except ImportError:
     _HAS_NEW_API = False
 
 
+@dataclass
+class HandData:
+    landmarks: List[np.ndarray]
+    handedness: str
+
+
 class HandTracker:
     LANDMARK_NAMES = [
         "WRIST", "THUMB_CMC", "THUMB_MCP", "THUMB_IP", "THUMB_TIP",
@@ -47,7 +54,7 @@ class HandTracker:
     def __init__(self):
         self._hand_detected = False
         self._no_hand_frames = 0
-        self._last_landmarks: Optional[List[np.ndarray]] = None
+        self._last_hand_data: List[HandData] = []
         self._landmarker: Optional[HandLandmarker] = None
 
         if not _HAS_NEW_API:
@@ -63,7 +70,7 @@ class HandTracker:
                 min_tracking_confidence=config.tracking.min_tracking_confidence,
             )
             self._landmarker = HandLandmarker.create_from_options(options)
-            logger.info("HandLandmarker initialized")
+            logger.info("HandLandmarker initialized (max %d hands)", config.tracking.max_num_hands)
         except Exception as e:
             raise TrackingError(f"Failed to initialize HandLandmarker: {e}") from e
 
@@ -72,8 +79,8 @@ class HandTracker:
         return self._hand_detected
 
     @property
-    def last_landmarks(self) -> Optional[List[np.ndarray]]:
-        return self._last_landmarks
+    def last_hand_data(self) -> List[HandData]:
+        return self._last_hand_data
 
     def _convert_frame(self, frame: np.ndarray) -> Optional[Image]:
         try:
@@ -82,14 +89,19 @@ class HandTracker:
         except Exception:
             return None
 
-    def _extract_landmarks(self, result: HandLandmarkerResult) -> Optional[List[np.ndarray]]:
+    def _extract_hand_data(self, result: HandLandmarkerResult) -> List[HandData]:
         if not result.hand_landmarks or len(result.hand_landmarks) == 0:
-            return None
-        hand = result.hand_landmarks[0]
-        landmarks = []
-        for lm in hand:
-            landmarks.append(np.array([lm.x, lm.y, lm.z], dtype=np.float32))
-        return landmarks
+            return []
+        hands = []
+        for i, hand in enumerate(result.hand_landmarks):
+            landmarks = []
+            for lm in hand:
+                landmarks.append(np.array([lm.x, lm.y, lm.z], dtype=np.float32))
+            handedness = "Right"
+            if result.handedness and i < len(result.handedness) and len(result.handedness[i]) > 0:
+                handedness = result.handedness[i][0].category_name
+            hands.append(HandData(landmarks=landmarks, handedness=handedness))
+        return hands
 
     def process(self, frame: np.ndarray) -> Optional[List[np.ndarray]]:
         if frame is None or self._landmarker is None:
@@ -101,13 +113,14 @@ class HandTracker:
 
         try:
             result = self._landmarker.detect(mp_image)
-            landmarks = self._extract_landmarks(result)
+            hand_data = self._extract_hand_data(result)
 
-            if landmarks:
-                self._last_landmarks = landmarks
+            if hand_data:
+                self._last_hand_data = hand_data
                 self._hand_detected = True
                 self._no_hand_frames = 0
-                return landmarks
+                # backward compat: return landmarks of first hand
+                return hand_data[0].landmarks
             else:
                 self._no_hand_frames += 1
                 if self._no_hand_frames > 30:

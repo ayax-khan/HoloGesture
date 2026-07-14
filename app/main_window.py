@@ -22,6 +22,7 @@ from app.pipeline import ProcessingPipeline
 from app.renderer import Renderer
 from app.state_machine import AppState
 from app.gesture_engine import Gesture
+from app.hand_tracker import HandData
 from app.mesh import ObjectType, OBJECT_NAMES
 from app.errors import install_global_exception_hook
 
@@ -233,43 +234,56 @@ class HoloGestureWindow(QMainWindow):
 
         status = data.get("hand_status", "")
         is_grabbed = data.get("is_grabbed", False)
+        hand_data_list = data.get("hand_data_list", [])
+        num_hands = len([h for h in hand_data_list if h.landmarks])
+        hand_info = f" [{num_hands} hand{'s' if num_hands != 1 else ''}]"
+
         if is_grabbed:
-            status = "✊ Grabbed — move hand to shift object"
+            status = "✊ Grabbed — move left hand to shift"
             ss = "color: #FF4444; background: rgba(255, 68, 68, 0.12); border-color: rgba(255, 68, 68, 0.4);"
         elif data.get("tracking_lost", False):
             ss = "color: #FFAA44; background: rgba(255, 170, 68, 0.08); border-color: rgba(255, 170, 68, 0.3);"
         else:
             ss = "color: #88CCFF; background: rgba(0, 174, 249, 0.08); border-color: rgba(0, 174, 249, 0.2);"
         self._status_label.setStyleSheet(f"font-size: 14px; {ss} padding: 8px 12px; border-radius: 4px;")
-        self._status_label.setText(status)
+        self._status_label.setText(status + hand_info)
+
+    def _draw_hand_skeleton(self, img: np.ndarray, landmarks: list,
+                             lm_color, skeleton_color, thickness=2):
+        for idx1, idx2 in HAND_SKELETON:
+            if idx1 < len(landmarks) and idx2 < len(landmarks):
+                x1 = int(landmarks[idx1][0] * self.PREVIEW_W)
+                y1 = int(landmarks[idx1][1] * self.PREVIEW_H)
+                x2 = int(landmarks[idx2][0] * self.PREVIEW_W)
+                y2 = int(landmarks[idx2][1] * self.PREVIEW_H)
+                cv2.line(img, (x1, y1), (x2, y2), skeleton_color, thickness)
+        for lm in landmarks:
+            x = int(lm[0] * self.PREVIEW_W)
+            y = int(lm[1] * self.PREVIEW_H)
+            cv2.circle(img, (x, y), 4, lm_color, -1)
+            cv2.circle(img, (x, y), 4, (255, 255, 255), 1)
 
     def _update_camera_preview(self):
         data = self._pipeline.hud_data
         frame = data.get("frame")
-        landmarks = data.get("landmarks")
+        hand_data_list = data.get("hand_data_list", [])
         detected = data.get("hand_detected", False)
 
         if frame is None:
             return
 
-        h, w = frame.shape[:2]
         preview = cv2.resize(frame, (self.PREVIEW_W, self.PREVIEW_H))
 
-        if detected and landmarks and self._show_landmarks:
-            for connection in HAND_SKELETON:
-                idx1, idx2 = connection
-                if idx1 < len(landmarks) and idx2 < len(landmarks):
-                    x1 = int(landmarks[idx1][0] * self.PREVIEW_W)
-                    y1 = int(landmarks[idx1][1] * self.PREVIEW_H)
-                    x2 = int(landmarks[idx2][0] * self.PREVIEW_W)
-                    y2 = int(landmarks[idx2][1] * self.PREVIEW_H)
-                    cv2.line(preview, (x1, y1), (x2, y2), (0, 180, 255), 2)
-
-            for lm in landmarks:
-                x = int(lm[0] * self.PREVIEW_W)
-                y = int(lm[1] * self.PREVIEW_H)
-                cv2.circle(preview, (x, y), 4, (0, 255, 255), -1)
-                cv2.circle(preview, (x, y), 4, (255, 255, 255), 1)
+        if detected and hand_data_list and self._show_landmarks:
+            for hd in hand_data_list:
+                if hd.handedness == "Left":
+                    self._draw_hand_skeleton(
+                        preview, hd.landmarks,
+                        lm_color=(0, 255, 255), skeleton_color=(0, 180, 255))
+                else:
+                    self._draw_hand_skeleton(
+                        preview, hd.landmarks,
+                        lm_color=(255, 0, 255), skeleton_color=(0, 255, 128))
 
         rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
         img = QImage(rgb.data, self.PREVIEW_W, self.PREVIEW_H, QImage.Format_RGB888)

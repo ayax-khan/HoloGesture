@@ -1,12 +1,12 @@
 import logging
 import time
-from typing import Optional
+from typing import Optional, List, Tuple
 
 import numpy as np
 
 from config import config
 from app.camera import Camera
-from app.hand_tracker import HandTracker
+from app.hand_tracker import HandTracker, HandData
 from app.gesture_engine import GestureEngine, GestureEvent, Gesture
 from app.object_model import ObjectModel
 from app.renderer import Renderer
@@ -32,12 +32,14 @@ class ProcessingPipeline:
         install_global_exception_hook()
         self.camera = Camera()
         self.tracker = HandTracker()
-        self.gesture_engine = GestureEngine()
+        self.left_gesture = GestureEngine()
+        self.right_gesture = GestureEngine()
         self.object_model = ObjectModel()
         self.renderer = Renderer()
         self.hud = HudOverlay()
         self.state_machine = build_default_state_machine()
         self._last_frame: Optional[np.ndarray] = None
+        self._hand_data_list: List[HandData] = []
         self._landmarks: Optional[list] = None
         self._last_gesture_event: Optional[GestureEvent] = None
         self._running = False
@@ -87,6 +89,7 @@ class ProcessingPipeline:
         self._last_frame = frame
         landmarks = self.tracker.process(frame)
         self._landmarks = landmarks
+        self._hand_data_list = self.tracker.last_hand_data
         self.hud.set_hand_detected(landmarks is not None, dt)
         if landmarks is not None:
             self.state_machine.transition(AppState.READY)
@@ -99,11 +102,12 @@ class ProcessingPipeline:
         self._last_frame = frame
         landmarks = self.tracker.process(frame)
         self._landmarks = landmarks
+        self._hand_data_list = self.tracker.last_hand_data
         self.hud.set_hand_detected(landmarks is not None, dt)
         if landmarks is None:
             self.state_machine.transition(AppState.SEARCHING_FOR_HAND)
             return
-        event = self.gesture_engine.classify(landmarks, dt)
+        event = self.left_gesture.classify(landmarks, dt)
         self._last_gesture_event = event
         self.hud.update_gesture(event.gesture, event.confidence, dt)
         if event.gesture != Gesture.NONE:
@@ -117,81 +121,80 @@ class ProcessingPipeline:
         self._last_frame = frame
         landmarks = self.tracker.process(frame)
         self._landmarks = landmarks
+        self._hand_data_list = self.tracker.last_hand_data
         self.hud.set_hand_detected(landmarks is not None, dt)
         if landmarks is None:
             self._last_gesture_event = None
             self.state_machine.transition(AppState.SEARCHING_FOR_HAND)
             return
-        event = self.gesture_engine.classify(landmarks, dt)
-        self._last_gesture_event = event
-        self.hud.update_gesture(event.gesture, event.confidence, dt)
-        self._apply_gesture_action(event, dt)
-        if event.gesture == Gesture.NONE:
+
+        left_event = None
+        right_event = None
+        for hd in self._hand_data_list:
+            eng = self.left_gesture if hd.handedness == "Left" else self.right_gesture
+            evt = eng.classify(hd.landmarks, dt)
+            if hd.handedness == "Left":
+                left_event = evt
+            else:
+                right_event = evt
+
+        display_evt = left_event or right_event
+        if display_evt:
+            self._last_gesture_event = display_evt
+            self.hud.update_gesture(display_evt.gesture, display_evt.confidence, dt)
+
+        self._apply_two_hand_actions(left_event, right_event, dt)
+
+        any_active = (left_event and left_event.gesture != Gesture.NONE) or \
+                     (right_event and right_event.gesture != Gesture.NONE)
+        if not any_active:
             self.state_machine.transition(AppState.READY)
 
-    def _on_error_state(self, dt: float):
-        self._maybe_recover()
-
-    def _on_shutting_down(self):
-        logger.info("Shutting down...")
-        self.cleanup()
-        self.state_machine.transition(AppState.SHUTDOWN)
-
-    def _apply_gesture_action(self, event: GestureEvent, dt: float):
-        gesture = event.gesture
-        pos = event.hand_position
-        if pos is None:
-            return
-
-        if gesture == Gesture.FIST:
-            self._is_grabbed = True
+    def _apply_two_hand_actions(self, left: Optional[GestureEvent],
+                                 right: Optional[GestureEvent], dt: float):
+        # Left hand → grab & move (translation)
+        if left and left.gesture in (Gesture.FIST, Gesture.POINTING) and left.hand_position is not None:
+            pos = left.hand_position
             if self._grab_last_pos is not None:
                 dx = (pos[0] - self._grab_last_pos[0]) * 3.0
                 dy = (pos[1] - self._grab_last_pos[1]) * 3.0
                 dz = (self._grab_last_pos[2] - pos[2]) * 3.0
                 self.object_model.translate_by(dx, -dy, dz)
             self._grab_last_pos = pos.copy()
+            self._is_grabbed = True
+            self._last_hand_pos = None
+        elif left and left.gesture == Gesture.FIST:
+            self._is_grabbed = True
+        else:
+            if left is None or left.gesture == Gesture.NONE:
+                pass
+            self._grab_last_pos = None
+            self._is_grabbed = False
+
+        # Right hand → rotate & scale
+        if right and right.hand_position is not None:
+            pos = right.hand_position
+            if right.gesture == Gesture.OPEN_PALM:
+                if self._last_hand_pos is not None:
+                    dx = (pos[0] - self._last_hand_pos[0]) * 120.0
+                    dy = (pos[1] - self._last_hand_pos[1]) * 120.0
+                    self.object_model.rotate_by(dy, dx)
+                self._last_hand_pos = pos.copy()
+            elif right.gesture == Gesture.PINCH:
+                if self._last_hand_pos is not None:
+                    dz = (self._last_hand_pos[2] - pos[2]) * 3.0
+                    self.object_model.scale_by(dz)
+                self._last_hand_pos = pos.copy()
+            elif right.gesture == Gesture.THUMBS_UP:
+                self.object_model.reset()
+            else:
+                if right.gesture != Gesture.FIST and right.gesture != Gesture.POINTING:
+                    self._last_hand_pos = None
+        else:
             self._last_hand_pos = None
 
-        elif gesture == Gesture.OPEN_PALM:
-            self._is_grabbed = False
-            if self._last_hand_pos is not None:
-                dx = (pos[0] - self._last_hand_pos[0]) * 120.0
-                dy = (pos[1] - self._last_hand_pos[1]) * 120.0
-                self.object_model.rotate_by(dy, dx)
-            self._last_hand_pos = pos.copy()
+        if not self._is_grabbed:
             self._grab_last_pos = None
-
-        elif gesture == Gesture.PINCH:
-            self._is_grabbed = False
-            if self._last_hand_pos is not None:
-                dz = (self._last_hand_pos[2] - pos[2]) * 3.0
-                self.object_model.scale_by(dz)
-            self._last_hand_pos = pos.copy()
-            self._grab_last_pos = None
-
-        elif gesture in (Gesture.SWIPE_LEFT, Gesture.SWIPE_RIGHT):
-            self._is_grabbed = False
-            direction = -1.0 if gesture == Gesture.SWIPE_LEFT else 1.0
-            self.object_model.translate_by(direction * 0.1, 0.0)
-
-        elif gesture == Gesture.POINTING:
-            self._is_grabbed = False
-            if self._last_hand_pos is not None:
-                dx = (pos[0] - self._last_hand_pos[0]) * 2.0
-                dy = (pos[1] - self._last_hand_pos[1]) * 2.0
-                self.object_model.translate_by(dx, -dy)
-            self._last_hand_pos = pos.copy()
-            self._grab_last_pos = None
-
-        elif gesture == Gesture.THUMBS_UP:
-            self._is_grabbed = False
-            self.object_model.reset()
-
-        if gesture == Gesture.NONE:
-            self._last_hand_pos = None
-            self._grab_last_pos = None
-            self._is_grabbed = False
 
     def _handle_camera_error(self):
         self.hud.set_status("Camera error - attempting reconnect...")
@@ -258,6 +261,7 @@ class ProcessingPipeline:
         data = self.hud.get_hud_data()
         data["frame"] = self._last_frame
         data["landmarks"] = self._landmarks
+        data["hand_data_list"] = self._hand_data_list
         data["hand_detected"] = self.tracker.hand_detected
         data["is_grabbed"] = self._is_grabbed
         return data
@@ -265,4 +269,3 @@ class ProcessingPipeline:
     @property
     def current_fps(self) -> int:
         return self._current_fps
-
