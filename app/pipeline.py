@@ -113,6 +113,11 @@ class ProcessingPipeline:
         if event.gesture != Gesture.NONE:
             self.state_machine.transition(AppState.INTERACTING)
 
+    def _on_shutting_down(self):
+        logger.info("Shutting down...")
+        self.cleanup()
+        self.state_machine.transition(AppState.SHUTDOWN)
+
     def _on_error_state(self, dt: float):
         self._maybe_recover()
 
