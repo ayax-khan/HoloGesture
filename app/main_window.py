@@ -224,7 +224,12 @@ class HoloGestureWindow(QMainWindow):
         self._gesture_label.setText(f"✦ {gesture}" if gesture else "HoloGesture")
 
         obj_type = self._pipeline.renderer.current_object_type
-        self._object_label.setText(OBJECT_NAMES.get(obj_type, ""))
+        renderer = self._pipeline.renderer
+        if obj_type == ObjectType.LOADED_MODEL and renderer.has_loaded_model:
+            model_name = renderer.current_model_name
+            self._object_label.setText(f"📦 {model_name}")
+        else:
+            self._object_label.setText(OBJECT_NAMES.get(obj_type, ""))
 
         fps = data.get("fps", 0)
         perf = data.get("performance_warning", False)
@@ -290,10 +295,15 @@ class HoloGestureWindow(QMainWindow):
         self._cam_preview_label.setPixmap(QPixmap.fromImage(img))
 
     def _switch_object(self):
-        types = list(ObjectType)
-        current = self._pipeline.renderer.current_object_type
-        idx = (types.index(current) + 1) % len(types)
-        self._pipeline.renderer.current_object_type = types[idx]
+        renderer = self._pipeline.renderer
+        current = renderer.current_object_type
+        if current == ObjectType.LOADED_MODEL:
+            renderer._model_manager.next()
+            renderer._rebuild_loaded_mesh()
+        else:
+            types = [t for t in ObjectType]
+            idx = (types.index(current) + 1) % len(types)
+            renderer.current_object_type = types[idx]
 
     def _show_settings(self):
         dlg = SettingsDialog(self)

@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import Tuple
+from typing import Tuple, Optional
 
 import numpy as np
 from OpenGL import GL
@@ -10,6 +10,7 @@ class ObjectType(Enum):
     SOLID_SPHERE = auto()
     WIREFRAME_CUBE = auto()
     HOLOGRAPHIC_SPHERE = auto()
+    LOADED_MODEL = auto()
 
 
 OBJECT_NAMES = {
@@ -17,7 +18,15 @@ OBJECT_NAMES = {
     ObjectType.SOLID_SPHERE: "Solid Sphere",
     ObjectType.WIREFRAME_CUBE: "Wireframe Cube",
     ObjectType.HOLOGRAPHIC_SPHERE: "HoloSphere",
+    ObjectType.LOADED_MODEL: "Loaded Model",
 }
+
+MODEL_FILES = [
+    "pyramid.obj",
+    "diamond.obj",
+    "torus.obj",
+    "cylinder.obj",
+]
 
 
 class Mesh:
@@ -44,6 +53,15 @@ class Mesh:
             vertices, indices = self._cube_data()
             self.primitive_type = GL.GL_TRIANGLES
 
+        self._upload(vertices, indices)
+
+    def build_from_data(self, vertices: np.ndarray, indices: np.ndarray,
+                         primitive_type: int = GL.GL_TRIANGLES):
+        self.primitive_type = primitive_type
+        self.index_count = len(indices)
+        self._upload(vertices, indices)
+
+    def _upload(self, vertices: np.ndarray, indices: np.ndarray):
         self.index_count = len(indices)
 
         GL.glBindVertexArray(self.vao)
