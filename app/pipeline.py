@@ -113,6 +113,9 @@ class ProcessingPipeline:
         if event.gesture != Gesture.NONE:
             self.state_machine.transition(AppState.INTERACTING)
 
+    def _on_error_state(self, dt: float):
+        self._maybe_recover()
+
     def _on_interacting(self, dt: float):
         frame = self.camera.read()
         if frame is None:
