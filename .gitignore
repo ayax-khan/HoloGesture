@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.env
+*.log
+doc_text.txt
+doc_sections.txt
+hologesture.log
+settings.json
+.pytest_cache/
+hand_landmarker.task
+*.docx
