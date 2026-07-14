@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Dict, Optional, Tuple, List
 
+import cv2
 import numpy as np
 from OpenGL import GL
 
@@ -59,6 +60,10 @@ class ShaderProgram:
     def set_float(self, name: str, val: float):
         loc = self.uniform_location(name)
         GL.glUniform1f(loc, val)
+
+    def set_int(self, name: str, val: int):
+        loc = self.uniform_location(name)
+        GL.glUniform1i(loc, val)
 
     def delete(self):
         GL.glDeleteProgram(self.program)
@@ -127,11 +132,20 @@ class Renderer:
             os.path.join(config.app.assets_dir, "models")
         )
 
+        # Camera background
+        self._bg_vao: Optional[int] = None
+        self._bg_vbo: Optional[int] = None
+        self._camera_texture: Optional[int] = None
+        self._camera_frame: Optional[np.ndarray] = None
+        self._bg_needs_update = True
+
     def initialize(self):
         logger.info("Initializing renderer")
         try:
             self._build_shaders()
             self._build_meshes()
+            self._build_background_quad()
+            self._create_camera_texture()
             self._model_manager.scan()
             self._rebuild_loaded_mesh()
             self._initialized = True
@@ -166,6 +180,57 @@ class Renderer:
             self._loaded_mesh.build_from_data(
                 obj_model.vertices, obj_model.indices
             )
+
+    def _build_background_quad(self):
+        quad_verts = np.array([
+            -1.0, -1.0,  0.0, 1.0,
+             1.0, -1.0,  1.0, 1.0,
+             1.0,  1.0,  1.0, 0.0,
+            -1.0,  1.0,  0.0, 0.0,
+        ], dtype=np.float32)
+        quad_indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
+
+        self._bg_vao = GL.glGenVertexArrays(1)
+        self._bg_vbo = GL.glGenBuffers(2)
+
+        GL.glBindVertexArray(self._bg_vao)
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self._bg_vbo[0])
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, quad_verts.nbytes, quad_verts, GL.GL_STATIC_DRAW)
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self._bg_vbo[1])
+        GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER, quad_indices.nbytes, quad_indices, GL.GL_STATIC_DRAW)
+
+        stride = 16
+        GL.glVertexAttribPointer(0, 2, GL.GL_FLOAT, GL.GL_FALSE, stride, GL.ctypes.c_void_p(0))
+        GL.glEnableVertexAttribArray(0)
+        GL.glVertexAttribPointer(1, 2, GL.GL_FLOAT, GL.GL_FALSE, stride, GL.ctypes.c_void_p(8))
+        GL.glEnableVertexAttribArray(1)
+        GL.glBindVertexArray(0)
+
+    def _create_camera_texture(self):
+        self._camera_texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._camera_texture)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGB, 640, 480, 0, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, None)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+
+    def update_camera_frame(self, frame: Optional[np.ndarray]):
+        self._camera_frame = frame
+
+    def _upload_camera_texture(self):
+        if self._camera_frame is None or self._camera_texture is None:
+            return
+        try:
+            rgb = cv2.cvtColor(self._camera_frame, cv2.COLOR_BGR2RGB)
+            h, w = rgb.shape[:2]
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self._camera_texture)
+            GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
+            GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGB, w, h, 0, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, rgb)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+        except Exception as e:
+            logger.warning("Camera texture upload error: %s", e)
 
     @property
     def current_object_type(self) -> ObjectType:
@@ -216,6 +281,23 @@ class Renderer:
 
         GL.glClearColor(*config.render.clear_color)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+
+        # 1) Draw camera background
+        if self._camera_texture is not None and self._camera_frame is not None:
+            self._upload_camera_texture()
+            bg_prog = self._shaders.get("background")
+            if bg_prog and self._bg_vao is not None:
+                GL.glDisable(GL.GL_DEPTH_TEST)
+                bg_prog.use()
+                GL.glActiveTexture(GL.GL_TEXTURE0)
+                GL.glBindTexture(GL.GL_TEXTURE_2D, self._camera_texture)
+                bg_prog.set_int("uCameraTexture", 0)
+                GL.glBindVertexArray(self._bg_vao)
+                GL.glDrawElements(GL.GL_TRIANGLES, 6, GL.GL_UNSIGNED_INT, None)
+                GL.glBindVertexArray(0)
+                GL.glEnable(GL.GL_DEPTH_TEST)
+
+        # 2) Draw 3D object
         GL.glEnable(GL.GL_DEPTH_TEST)
         GL.glEnable(GL.GL_BLEND)
         GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
@@ -233,35 +315,33 @@ class Renderer:
             elif self._current_obj_type == ObjectType.HOLOGRAPHIC_SPHERE:
                 shader_key = "holographic"
 
-        if mesh is None:
-            return
+        if mesh is not None:
+            prog = self._shaders[shader_key]
 
-        prog = self._shaders[shader_key]
+            prog.use()
+            prog.set_mat4("uProjection", self._projection_matrix)
+            prog.set_mat4("uView", self._view_matrix)
+            prog.set_mat4("uModel", obj.model_matrix)
 
-        prog.use()
-        prog.set_mat4("uProjection", self._projection_matrix)
-        prog.set_mat4("uView", self._view_matrix)
-        prog.set_mat4("uModel", obj.model_matrix)
+            light_pos = np.array([2.0, 3.0, 2.0], dtype=np.float32)
+            view_pos = np.array([0.0, 1.0, 3.0], dtype=np.float32)
+            color = np.array([0.0, 0.682, 0.937], dtype=np.float32)
 
-        light_pos = np.array([2.0, 3.0, 2.0], dtype=np.float32)
-        view_pos = np.array([0.0, 1.0, 3.0], dtype=np.float32)
-        color = np.array([0.0, 0.682, 0.937], dtype=np.float32)
+            prog.set_vec3("uLightPos", light_pos)
+            prog.set_vec3("uViewPos", view_pos)
+            prog.set_vec3("uColor", color)
+            prog.set_float("uGlowIntensity", config.render.glow_intensity)
+            prog.set_float("uTime", self._time)
 
-        prog.set_vec3("uLightPos", light_pos)
-        prog.set_vec3("uViewPos", view_pos)
-        prog.set_vec3("uColor", color)
-        prog.set_float("uGlowIntensity", config.render.glow_intensity)
-        prog.set_float("uTime", self._time)
+            if shader_key == "wireframe":
+                GL.glLineWidth(1.5)
 
-        if shader_key == "wireframe":
-            GL.glLineWidth(1.5)
+            GL.glBindVertexArray(mesh.vao)
+            GL.glDrawElements(mesh.primitive_type, mesh.index_count, GL.GL_UNSIGNED_INT, None)
+            GL.glBindVertexArray(0)
 
-        GL.glBindVertexArray(mesh.vao)
-        GL.glDrawElements(mesh.primitive_type, mesh.index_count, GL.GL_UNSIGNED_INT, None)
-        GL.glBindVertexArray(0)
-
-        if shader_key == "wireframe":
-            GL.glLineWidth(1.0)
+            if shader_key == "wireframe":
+                GL.glLineWidth(1.0)
 
     def cleanup(self):
         if self._loaded_mesh:
@@ -270,6 +350,15 @@ class Renderer:
         for mesh in self._meshes.values():
             mesh.delete()
         self._meshes.clear()
+        if self._bg_vao is not None:
+            GL.glDeleteVertexArrays(1, [self._bg_vao])
+            self._bg_vao = None
+        if self._bg_vbo is not None:
+            GL.glDeleteBuffers(2, self._bg_vbo)
+            self._bg_vbo = None
+        if self._camera_texture is not None:
+            GL.glDeleteTextures(1, [self._camera_texture])
+            self._camera_texture = None
         for prog in self._shaders.values():
             prog.delete()
         self._shaders.clear()
