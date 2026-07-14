@@ -240,7 +240,6 @@ class ProcessingPipeline:
         self.hud.set_performance_warning(warning)
 
     def render(self):
-        self.renderer.update_camera_frame(self._last_frame)
         self.renderer.render(self.object_model, 1.0 / max(self._current_fps, 1))
 
     def resize(self, width: int, height: int):

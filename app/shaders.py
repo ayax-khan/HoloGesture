@@ -104,32 +104,8 @@ void main() {
 """
 
 
-# Background shader (camera feed textured full-screen quad)
-BACKGROUND_VERTEX_SRC = """
-#version 330 core
-layout(location = 0) in vec2 aPos;
-layout(location = 1) in vec2 aUV;
-out vec2 vUV;
-void main() {
-    vUV = aUV;
-    gl_Position = vec4(aPos, 0.0, 1.0);
-}
-"""
-
-BACKGROUND_FRAGMENT_SRC = """
-#version 330 core
-in vec2 vUV;
-uniform sampler2D uCameraTexture;
-out vec4 FragColor;
-void main() {
-    FragColor = texture(uCameraTexture, vUV);
-}
-"""
-
-
 SHADER_SOURCES = {
     "solid": (VERTEX_SHADER_SRC, SOLID_FRAGMENT_SRC),
     "wireframe": (VERTEX_SHADER_SRC, WIREFRAME_FRAGMENT_SRC),
     "holographic": (VERTEX_SHADER_SRC, HOLOGRAPHIC_FRAGMENT_SRC),
-    "background": (BACKGROUND_VERTEX_SRC, BACKGROUND_FRAGMENT_SRC),
 }
