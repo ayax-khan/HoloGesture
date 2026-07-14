@@ -291,3 +291,7 @@ pytest tests/ -v
 ## License
 
 Distributed under the MIT License. See `LICENSE` for more information.
+
+---
+
+<p align="center">Powered by <strong>ayax-khan</strong> — Co-founder of <a href="https://devssdo.com">devssdo.com</a></p>
