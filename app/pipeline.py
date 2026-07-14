@@ -63,10 +63,9 @@ class ProcessingPipeline:
         self.hud.set_status("Initializing...")
         try:
             self.camera.open()
-            self.renderer.initialize()
-            logger.info("Initialization complete")
+            logger.info("Camera initialized")
         except (CameraError, HoloError) as e:
-            logger.error(f"Initialization failed: {e}")
+            logger.error(f"Camera initialization failed: {e}")
             self.state_machine.force_set(AppState.ERROR)
             return
         self.state_machine.transition(AppState.SEARCHING_FOR_HAND)
@@ -238,3 +237,4 @@ class ProcessingPipeline:
     @property
     def current_fps(self) -> int:
         return self._current_fps
+
